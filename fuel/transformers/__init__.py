@@ -97,10 +97,12 @@ class Mapping(Transformer):
         data under source names `add_sources`.
 
     """
-    def __init__(self, data_stream, mapping, add_sources=None):
+    def __init__(self, data_stream, mapping, add_sources=None,
+                 **kwargs):
         super(Mapping, self).__init__(data_stream)
         self.mapping = mapping
         self.add_sources = add_sources
+        self.mapping_args = kwargs
 
     @property
     def sources(self):
@@ -111,7 +113,7 @@ class Mapping(Transformer):
         if request is not None:
             raise ValueError
         data = next(self.child_epoch_iterator)
-        image = self.mapping(data)
+        image = self.mapping(data, **self.mapping_args)
         if not self.add_sources:
             return image
         return data + image
@@ -148,13 +150,15 @@ class Filter(Transformer):
         Should return ``True`` for the samples to be kept.
 
     """
-    def __init__(self, data_stream, predicate):
+    def __init__(self, data_stream, predicate, predicate_args=None):
         super(Filter, self).__init__(data_stream)
         self.predicate = predicate
+        self.predicate_args = predicate_args
 
     def get_epoch_iterator(self, **kwargs):
         super(Filter, self).get_epoch_iterator(**kwargs)
-        return ifilter(self.predicate, self.child_epoch_iterator)
+        return ifilter(self.predicate, self.child_epoch_iterator,
+                       **self.predicate_args)
 
 
 class Cache(Transformer):
