@@ -153,7 +153,7 @@ class Filter(Transformer):
     def __init__(self, data_stream, predicate, predicate_args=None):
         super(Filter, self).__init__(data_stream)
         self.predicate = predicate
-        self.predicate_args = predicate_args
+        self.predicate_args = predicate_args if predicate_args else {}
 
     def get_epoch_iterator(self, **kwargs):
         super(Filter, self).get_epoch_iterator(**kwargs)
