@@ -36,8 +36,9 @@ class AbstractDataStream(object):
         given by the dataset.
 
     """
-    def __init__(self, iteration_scheme=None):
+    def __init__(self, iteration_scheme=None, axis_labels=None):
         self.iteration_scheme = iteration_scheme
+        self.axis_labels = axis_labels
 
     def get_data(self, request=None):
         """Request data from the dataset or the wrapped stream.
@@ -48,22 +49,18 @@ class AbstractDataStream(object):
             A request fetched from the `request_iterator`.
 
         """
-        pass
 
     @abstractmethod
     def reset(self):
         """Reset the data stream."""
-        pass
 
     @abstractmethod
     def close(self):
         """Gracefully close the data stream, e.g. releasing file handles."""
-        pass
 
     @abstractmethod
     def next_epoch(self):
         """Switch the data stream to the next epoch."""
-        pass
 
     @abstractmethod
     def get_epoch_iterator(self, as_dict=False):
@@ -101,6 +98,7 @@ class DataStream(AbstractDataStream):
 
     """
     def __init__(self, dataset, **kwargs):
+        kwargs.setdefault('axis_labels', dataset.axis_labels)
         super(DataStream, self).__init__(**kwargs)
         self.dataset = dataset
         self.data_state = self.dataset.open()
@@ -137,6 +135,11 @@ class DataStream(AbstractDataStream):
         else:
             self._fresh_state = False
         return super(DataStream, self).get_epoch_iterator(**kwargs)
+
+    @classmethod
+    def default_stream(cls, dataset, **kwargs):
+        data_stream = cls(dataset, **kwargs)
+        return dataset.apply_default_transformers(data_stream)
 
 
 class ServerDataStream(AbstractDataStream):
@@ -198,3 +201,4 @@ class ServerDataStream(AbstractDataStream):
         state = self.__dict__.copy()
         state['connected'] = False
         del state['socket']
+        return state

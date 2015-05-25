@@ -10,6 +10,12 @@ subparser with a function that will get called and given the parsed
 command-line arguments, and is expected to download the required files.
 
 """
-from fuel.converters.binarized_mnist import binarized_mnist
+from fuel.converters import binarized_mnist
+from fuel.converters import cifar10
+from fuel.converters import mnist
 
-__all__ = ('binarized_mnist',)
+__version__ = '0.1'
+all_converters = (
+    ('binarized_mnist', binarized_mnist.fill_subparser),
+    ('cifar10', cifar10.fill_subparser),
+    ('mnist', mnist.fill_subparser))

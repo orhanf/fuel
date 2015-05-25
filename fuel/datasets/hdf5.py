@@ -4,12 +4,13 @@ from collections import defaultdict, OrderedDict
 import h5py
 import numpy
 import tables
+from six.moves import zip
 
 from fuel.datasets import Dataset
 from fuel.utils import do_not_pickle_attributes
 
 
-@do_not_pickle_attributes('nodes')
+@do_not_pickle_attributes('nodes', 'h5file')
 class Hdf5Dataset(Dataset):
     """An HDF5 dataset.
 
@@ -45,13 +46,16 @@ class Hdf5Dataset(Dataset):
         super(Hdf5Dataset, self).__init__(self.provides_sources)
 
     def open_file(self, path):
-        h5file = tables.open_file(path, mode="r")
-        node = h5file.getNode('/', self.data_node)
+        self.h5file = tables.open_file(path, mode="r")
+        node = self.h5file.getNode('/', self.data_node)
 
         self.nodes = [getattr(node, source) for source in self.sources_in_file]
 
     def load(self):
         self.open_file(self.path)
+
+    def close(self):
+        self.h5file.close()
 
     def get_data(self, state=None, request=None):
         """ Returns data from HDF5 dataset.
@@ -63,15 +67,16 @@ class Hdf5Dataset(Dataset):
             if isinstance(request, slice):
                 request = slice(request.start + self.start,
                                 request.stop + self.start, request.step)
+                data = [node[request] for node in self.nodes]
             elif isinstance(request, list):
                 request = [index + self.start for index in request]
+                data = [node[request, ...] for node in self.nodes]
             else:
                 raise ValueError
-        data = [node[request] for node in self.nodes]
         return data
 
 
-@do_not_pickle_attributes('data_sources')
+@do_not_pickle_attributes('data_sources', 'external_file_handle')
 class H5PYDataset(Dataset):
     """An h5py-fueled HDF5 dataset.
 
@@ -96,8 +101,8 @@ class H5PYDataset(Dataset):
 
     Parameters
     ----------
-    path : str
-        Path to the HDF5 file.
+    file_or_path : :class:`h5py.File` or str
+        HDF5 file handle, or path to the HDF5 file.
     which_set : str
         Which split to use.
     subset : slice, optional
@@ -119,11 +124,19 @@ class H5PYDataset(Dataset):
         indices are ordered.
 
     """
-    ref_counts = defaultdict(int)
+    interface_version = '0.1'
+    _ref_counts = defaultdict(int)
+    _file_handles = {}
 
-    def __init__(self, path, which_set, subset=None, load_in_memory=False,
-                 flatten=None, driver=None, sort_indices=True, **kwargs):
-        self.path = path
+    def __init__(self, file_or_path, which_set, subset=None,
+                 load_in_memory=False, driver=None, sort_indices=True,
+                 **kwargs):
+        if isinstance(file_or_path, h5py.File):
+            self.path = file_or_path.filename
+            self.external_file_handle = file_or_path
+        else:
+            self.path = file_or_path
+            self.external_file_handle = None
         self.driver = driver
         self.sort_indices = sort_indices
         if which_set not in self.available_splits:
@@ -135,18 +148,11 @@ class H5PYDataset(Dataset):
         subset = subset if subset else slice(None)
         if subset.step not in (1, None):
             raise ValueError("subset.step must be either 1 or None")
+        self._subset_template = subset
         self.load_in_memory = load_in_memory
-        self.flatten = [] if flatten is None else flatten
 
+        kwargs.setdefault('axis_labels', self.load_axis_labels())
         super(H5PYDataset, self).__init__(**kwargs)
-
-        for source in self.flatten:
-            if source not in self.provides_sources:
-                raise ValueError(
-                    "trying to flatten source '{}' which is ".format(source) +
-                    "not provided by the '{}' split".format(self.which_set))
-        self.subsets = [subset for source in self.sources]
-        self.load()
 
     @staticmethod
     def create_split_array(split_dict):
@@ -223,33 +229,25 @@ class H5PYDataset(Dataset):
                 split_dict[split][source] = (start, stop, comment)
         return split_dict
 
-    def _get_file_id(self):
-        file_id = [f for f in self.ref_counts.keys() if f.name == self.path]
-        if not file_id:
-            return self.path
-        file_id, = file_id
-        return file_id
-
     @property
     def split_dict(self):
         if not hasattr(self, '_split_dict'):
-            handle = self._out_of_memory_open()
+            self._out_of_memory_open()
+            handle = self._file_handle
             split_array = handle.attrs['split']
             self._split_dict = H5PYDataset.parse_split_array(split_array)
-            self._out_of_memory_close(handle)
+            self._out_of_memory_close()
         return self._split_dict
 
-    @property
-    def axis_labels(self):
-        if not hasattr(self, '_axis_labels'):
-            handle = self._out_of_memory_open()
-            axis_labels = {}
-            for source_name in handle:
-                axis_labels[source_name] = tuple(
-                    dim.label for dim in handle[source_name].dims)
-            self._axis_labels = axis_labels
-            self._out_of_memory_close(handle)
-        return self._axis_labels
+    def load_axis_labels(self):
+        self._out_of_memory_open()
+        handle = self._file_handle
+        axis_labels = {}
+        for source_name in handle:
+            axis_labels[source_name] = tuple(
+                dim.label for dim in handle[source_name].dims)
+        self._out_of_memory_close()
+        return axis_labels
 
     @property
     def available_splits(self):
@@ -259,52 +257,74 @@ class H5PYDataset(Dataset):
     def provides_sources(self):
         return tuple(self.split_dict[self.which_set].keys())
 
+    @property
+    def subsets(self):
+        if not hasattr(self, '_subsets'):
+            subsets = [self._subset_template for source in self.sources]
+            num_examples = None
+            for i, source_name in enumerate(self.sources):
+                start, stop = self.split_dict[self.which_set][source_name][:2]
+                subset = subsets[i]
+                subset = slice(
+                    start if subset.start is None else subset.start,
+                    stop if subset.stop is None else subset.stop,
+                    subset.step)
+                subsets[i] = subset
+                if num_examples is None:
+                    num_examples = subset.stop - subset.start
+                if num_examples != subset.stop - subset.start:
+                    raise ValueError("sources have different lengths")
+            self._subsets = subsets
+        return self._subsets
+
     def load(self):
-        handle = self._out_of_memory_open()
-        num_examples = None
-        for i, source_name in enumerate(self.sources):
-            start, stop = self.split_dict[self.which_set][source_name][:2]
-            subset = self.subsets[i]
-            subset = slice(
-                start if subset.start is None else subset.start,
-                stop if subset.stop is None else subset.stop,
-                subset.step)
-            self.subsets[i] = subset
-            if num_examples is None:
-                num_examples = subset.stop - subset.start
-            if num_examples != subset.stop - subset.start:
-                raise ValueError("sources have different lengths")
-        self.num_examples = num_examples
+        if not hasattr(self, '_external_file_handle'):
+            self.external_file_handle = None
         if self.load_in_memory:
-            data_sources = []
-            for source_name, subset in zip(self.sources, self.subsets):
-                data = handle[source_name][subset]
-                if source_name in self.flatten:
-                    data = data.reshape((data.shape[0], -1))
-                data_sources.append(data)
-            self.data_sources = data_sources
+            self._out_of_memory_open()
+            handle = self._file_handle
+            self.data_sources = tuple(
+                handle[source_name][subset] for source_name, subset in
+                zip(self.sources, self.subsets))
+            self._out_of_memory_close()
         else:
             self.data_sources = None
-        self._out_of_memory_close(handle)
+
+    @property
+    def num_examples(self):
+        return self.subsets[0].stop - self.subsets[0].start
 
     def open(self):
         return None if self.load_in_memory else self._out_of_memory_open()
 
     def _out_of_memory_open(self):
-        file_id = self._get_file_id()
-        state = h5py.File(name=file_id, mode="r", driver=self.driver)
-        self.ref_counts[state.id] += 1
-        return state
+        if not self._external_file_handle:
+            if self.path not in self._file_handles:
+                handle = h5py.File(
+                    name=self.path, mode="r", driver=self.driver)
+                self._file_handles[self.path] = handle
+            self._ref_counts[self.path] += 1
 
     def close(self, state):
         if not self.load_in_memory:
-            self._out_of_memory_close(state)
+            self._out_of_memory_close()
 
-    def _out_of_memory_close(self, state):
-        self.ref_counts[state.id] -= 1
-        if not self.ref_counts[state.id]:
-            del self.ref_counts[state.id]
-            state.close()
+    def _out_of_memory_close(self):
+        if not self._external_file_handle:
+            self._ref_counts[self.path] -= 1
+            if not self._ref_counts[self.path]:
+                del self._ref_counts[self.path]
+                self._file_handles[self.path].close()
+                del self._file_handles[self.path]
+
+    @property
+    def _file_handle(self):
+        if self._external_file_handle:
+            return self._external_file_handle
+        elif self.path in self._file_handles:
+            return self._file_handles[self.path]
+        else:
+            raise IOError('no open handle for file {}'.format(self.path))
 
     def get_data(self, state=None, request=None):
         if self.load_in_memory:
@@ -319,25 +339,24 @@ class H5PYDataset(Dataset):
 
     def _out_of_memory_get_data(self, state=None, request=None):
         rval = []
+        handle = self._file_handle
         for source_name, subset in zip(self.sources, self.subsets):
             if isinstance(request, slice):
                 req = slice(request.start + subset.start,
                             request.stop + subset.start, request.step)
-                data = state[source_name][req]
+                data = handle[source_name][req]
             elif isinstance(request, list):
                 req = [index + subset.start for index in request]
                 if self.sort_indices:
                     indices = numpy.argsort(req)
-                    source = state[source_name]
+                    source = handle[source_name]
                     data = numpy.empty(
                         shape=(len(req),) + source.shape[1:],
                         dtype=source.dtype)
                     data[indices] = source[numpy.array(req)[indices], ...]
                 else:
-                    data = state[source_name][req]
+                    data = handle[source_name][req]
             else:
                 raise ValueError
-            if source_name in self.flatten:
-                data = data.reshape((data.shape[0], -1))
             rval.append(data)
         return tuple(rval)

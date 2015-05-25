@@ -9,10 +9,10 @@ with open(path.join(HERE, 'README.rst')) as f:
 
 setup(
     name='fuel',
-    version='0.1a1',  # PEP 440 compliant
+    version='0.0.1',  # PEP 440 compliant
     description='Data pipeline framework for machine learning',
     long_description=LONG_DESCRIPTION,
-    url='https://github.com/bartvm/fuel.git',
+    url='https://github.com/mila-udem/fuel.git',
     author='Universite de Montreal',
     license='MIT',
     # See https://pypi.python.org/pypi?%3Aaction=list_classifiers
@@ -29,7 +29,10 @@ setup(
     ],
     keywords='dataset data iteration pipeline processing',
     packages=find_packages(exclude=['tests']),
-    install_requires=['six', 'picklable_itertools', 'toolz', 'pyyaml', 'h5py',
-                      'tables', 'urllib3', 'certifi'],
-    scripts=['bin/fuel-convert', 'bin/fuel-download']
+    install_requires=['six', 'picklable_itertools', 'pyyaml', 'h5py',
+                      'tables', 'progressbar2', 'pyzmq'],
+    extras_require={
+        'test': ['nose', 'nose2', 'mock']
+    },
+    scripts=['bin/fuel-convert', 'bin/fuel-download', 'bin/fuel-info']
 )

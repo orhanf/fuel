@@ -5,6 +5,7 @@ Welcome to Fuel's documentation!
    :hidden:
 
    overview
+   built_in_datasets
    h5py_dataset
    new_dataset
    api/index
@@ -30,7 +31,8 @@ Pylearn2_ neural network libraries.
 
 .. warning::
    Fuel is a new project which is still under development. As such, certain
-   (all) parts of the framework are subject to change.
+   (all) parts of the framework are subject to change. The last stable (but
+   possibly outdated) release can be found in the ``stable`` branch.
 
 .. tip::
 
@@ -39,8 +41,8 @@ Pylearn2_ neural network libraries.
    to file bug reports and feature requests by `making a GitHub issue`_.
 
 .. _mailing list: https://groups.google.com/d/forum/fuel-users
-.. _making a GitHub issue: https://github.com/bartvm/fuel/issues/new
-.. _Blocks: https://github.com/bartvm/blocks
+.. _making a GitHub issue: https://github.com/mila-udem/fuel/issues/new
+.. _Blocks: https://github.com/mila-udem/blocks
 .. _Pylearn2: https://github.com/lisa-lab/pylearb2
 
 Motivation
@@ -81,9 +83,18 @@ in a particular way. Let's say that in this case we want retrieve random
 minibatches of size 512.
 
 >>> from fuel.streams import DataStream
+>>> from fuel.transformers import Flatten
 >>> from fuel.schemes import ShuffledScheme
->>> stream = DataStream(
-...     mnist, iteration_scheme=ShuffledScheme(mnist.num_examples, 512))
+>>> stream = Flatten(
+...     DataStream.default_stream(
+...         mnist, iteration_scheme=ShuffledScheme(mnist.num_examples, 512)),
+...     which_sources=('features',))
+
+Datasets can apply various default transformations on the original
+data stream if their ``apply_default_transformers`` method is called. A
+convenient way to do so is to instantiate the data stream through the
+``default_stream`` class method. In this case, MNIST rescaled pixel values in
+the unit interval and flattened the images into vectors.
 
 This stream can now provide us with a Python iterator which will provide a
 total of 60,000 examples (``mnist.num_examples``) in the form of batches of

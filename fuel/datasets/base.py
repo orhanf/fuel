@@ -45,8 +45,9 @@ class Dataset(object):
 
     """
     provides_sources = None
+    default_transformers = tuple()
 
-    def __init__(self, sources=None):
+    def __init__(self, sources=None, axis_labels=None):
         if not self.provides_sources:
             raise ValueError("dataset does not have `provides_sources`")
         if sources is not None:
@@ -54,6 +55,7 @@ class Dataset(object):
                                       for source in sources):
                 raise ValueError("unable to provide requested sources")
             self.sources = sources
+        self.axis_labels = axis_labels
 
     @property
     def sources(self):
@@ -64,6 +66,20 @@ class Dataset(object):
     @sources.setter
     def sources(self, sources):
         self._sources = sources
+
+    def apply_default_transformers(self, stream):
+        """Applies default transformers to a stream.
+
+        Parameters
+        ----------
+        stream : :class:`~.streams.AbstractDataStream`
+            A data stream.
+
+        """
+        for (cls, args, kwargs) in self.default_transformers:
+            args = [stream] + args
+            stream = cls(*args, **kwargs)
+        return stream
 
     @property
     def example_iteration_scheme(self):
@@ -156,7 +172,6 @@ class Dataset(object):
             A tuple of data matching the order of :attr:`sources`.
 
         """
-        raise NotImplementedError
 
     def filter_sources(self, data):
         """Filter the requested sources from those provided by the dataset.
