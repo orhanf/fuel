@@ -8,6 +8,7 @@ from six.moves import range, cPickle
 
 from fuel.datasets.hdf5 import PytablesDataset, H5PYDataset
 from fuel.streams import DataStream
+from fuel.schemes import SequentialScheme
 
 
 class TestPytablesDataset(object):
@@ -153,12 +154,17 @@ class TestH5PYDataset(object):
             h5file.attrs['split'] = H5PYDataset.create_split_array(split_dict)
             dataset = cPickle.loads(
                 cPickle.dumps(H5PYDataset(h5file, which_sets=('train',))))
+            # Make sure _out_of_memory_{open,close} accesses
+            # external_file_handle rather than _external_file_handle
+            dataset._out_of_memory_open()
+            dataset._out_of_memory_close()
             assert dataset.data_sources is None
         finally:
             os.remove('file.hdf5')
 
     def test_data_stream_pickling(self):
-        stream = DataStream(H5PYDataset(self.h5file, which_sets=('train',)))
+        stream = DataStream(H5PYDataset(self.h5file, which_sets=('train',)),
+                            iteration_scheme=SequentialScheme(100, 10))
         cPickle.loads(cPickle.dumps(stream))
         stream.close()
 
@@ -184,10 +190,19 @@ class TestH5PYDataset(object):
         train_set.close(train_handle)
         test_set.close(test_handle)
 
-    def test_multiple_split(self):
-        dataset = H5PYDataset(self.h5file, which_sets=('train', 'test'))
+    def test_multiple_split_in_memory(self):
+        dataset = H5PYDataset(self.h5file, which_sets=('train', 'test'),
+                              load_in_memory=True)
         handle = dataset.open()
         assert_equal(dataset.get_data(handle, slice(0, 30)),
+                     (self.features[:30], self.targets[:30]))
+        dataset.close(handle)
+
+    def test_multiple_split_out_of_memory_list_request(self):
+        dataset = H5PYDataset(self.h5file, which_sets=('train', 'test'),
+                              load_in_memory=False)
+        handle = dataset.open()
+        assert_equal(dataset.get_data(handle, list(range(30))),
                      (self.features[:30], self.targets[:30]))
         dataset.close(handle)
 
